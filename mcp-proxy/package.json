@@ -1,0 +1,16 @@
+{
+  "name": "mcp-proxy",
+  "version": "1.0.0",
+  "description": "Vulnify in front of any MCP server",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env demo.mjs",
+    "test": "node --test"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "zod": "^4.6.7"
+  },
+  "type": "module",
+  "private": true
+}
