@@ -1,0 +1,3 @@
+vulnify>=0.4.2
+requests
+pytest
