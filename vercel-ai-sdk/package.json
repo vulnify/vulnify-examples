@@ -1,0 +1,17 @@
+{
+  "name": "vercel-ai-sdk",
+  "version": "1.0.0",
+  "description": "Vulnify guarding Vercel AI SDK tool calls",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env index.mjs",
+    "test": "node --test"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@vulnify/sdk": "^0.3.3",
+    "ai": "^7.0.143",
+    "zod": "^4.6.7"
+  },
+  "type": "module",
+  "private": true
+}
