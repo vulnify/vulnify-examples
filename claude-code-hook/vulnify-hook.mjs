@@ -51,16 +51,69 @@ function bashParts(command) {
   return command.split(/&&|\|\||[;|\n]/).map((p) => p.trim().replace(/^(\w+=\S*\s+)+/, '')).filter(Boolean);
 }
 
+const MAX_RECORDS = 1_000_000;
+const BIG = 10_000; // "the whole table": DELETE without WHERE, DROP, TRUNCATE
+const num = (v) => {
+  const n = Number(String(v).replace(/[_,]/g, ''));
+  return Number.isFinite(n) && n > 0 ? Math.min(Math.floor(n), MAX_RECORDS) : 0;
+};
+
+const EMAIL_API = /\b(api\.sendgrid\.com|api\.mailgun\.net|api\.resend\.com|api\.postmarkapp\.com|api\.mailjet\.com|api\.brevo\.com|api\.sendinblue\.com|email(-smtp)?\.[a-z0-9-]+\.amazonaws\.com|mandrillapp\.com|api\.sparkpost\.com|smtp\.)/i;
+const EMAIL_ADDR = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+
+/** Rough number of records a shell command touches. 1 when nothing says otherwise. */
+export function estimateBashRecords(c) {
+  const counts = [];
+  const sql = c.match(/\blimit\s+(\d+)/i);
+  if (sql) counts.push(num(sql[1]));
+  if (/\b(drop\s+(table|database|schema)|truncate(\s+table)?\s+\w)/i.test(c)) counts.push(BIG);
+  const del = c.match(/\b(delete\s+from|update)\s+[\w."]+([^;'"]*)/i);
+  if (del && !/\bwhere\b/i.test(del[2] || '') && !sql) counts.push(BIG);
+  for (const m of c.matchAll(/(?:--(?:limit|count|max-results|max-count|page-size|per-page|batch-size|records|rows|number)|(?:^|\s)-n)[=\s]+(\d[\d_,]*)/gi)) counts.push(num(m[1]));
+  for (const m of c.matchAll(/\bseq\s+(?:\d+\s+)?(\d+)/g)) counts.push(num(m[1]));
+  for (const m of c.matchAll(/\{\d+\.\.(\d+)\}/g)) counts.push(num(m[1]));
+  for (const part of bashParts(c)) {
+    const words = part.split(/\s+/);
+    const cmd = words[0];
+    const args = words.slice(1).filter((w) => w && !w.startsWith('-'));
+    if (['rm', 'shred', 'unlink', 'rmdir'].includes(cmd)) {
+      const recursive = words.some((w) => /^-\w*[rR]/.test(w) || w === '--recursive');
+      const glob = args.some((a) => /[*?[]/.test(a));
+      counts.push(Math.max(args.length, recursive || glob ? 100 : 0));
+    }
+    if (['scp', 'rsync', 'sftp'].includes(cmd) && args.length > 1) {
+      const recursive = words.some((w) => /^-\w*[ra]/.test(w));
+      counts.push(Math.max(args.length - 1, recursive ? 100 : 0));
+    }
+    if (['mail', 'mailx', 'mutt', 'sendmail', 'msmtp', 'ssmtp'].includes(cmd)) {
+      const rcpts = args.filter((a) => /@/.test(a)).length;
+      if (rcpts) counts.push(rcpts);
+    }
+  }
+  const rcpt = (c.match(/--mail-rcpt\b/g) || []).length;
+  if (rcpt) counts.push(rcpt);
+  return Math.max(1, ...counts.filter(Boolean));
+}
+
+function isEmailCommand(c) {
+  return /(^|[\s;&|(])(sendmail|mailx?|mutt|swaks|msmtp|ssmtp|mpack|mail\.py)(\s|$)/.test(c)
+    || /\bsmtps?:\/\//i.test(c) || /--mail-(rcpt|from)\b/.test(c)
+    || /\baws\s+sesv?2?\s+send-(raw-)?email\b/.test(c) || /\bsmtplib\b|\bnodemailer\b|\bnet\/smtp\b|Send-MailMessage/i.test(c)
+    || (/\b(curl|wget|http|httpie|xh)\b/.test(c) && EMAIL_API.test(c));
+}
+
 function classifyBash(command) {
   const c = command;
   if (/(^|[\s;&|(])(rm|rmdir|shred|unlink)\s/.test(c) || /\b(drop\s+(table|database|schema)|truncate\s+table|delete\s+from)\b/i.test(c)
-    || /git\s+(push\s+.*(--force|-f\b)|reset\s+--hard|clean\s+-\w*f|branch\s+-D)/.test(c)) {
-    return { action: 'DELETE_DATA', destination: 'INTERNAL' };
+    || /git\s+(push\s+.*(--force|-f\b)|reset\s+--hard|clean\s+-\w*f|branch\s+-D)/.test(c)
+    || /\b(curl|http|httpie|xh)\b.*\s-X\s*DELETE\b/i.test(c) || /\baws\s+s3\s+(rm|rb)\b|\bgsutil\s+rm\b|\bkubectl\s+delete\b/.test(c)) {
+    return { action: 'DELETE_DATA', destination: /\b(curl|http|httpie|xh|aws|gsutil|kubectl)\b/.test(c) && !/(^|[\s;&|(])rm\s/.test(c) ? 'EXTERNAL_API' : 'INTERNAL' };
   }
-  if (/\b(sendmail|mailx?|mutt)\b/.test(c)) return { action: 'SEND_EMAIL', destination: 'EXTERNAL_EMAIL' };
-  if (/\b(curl|wget|http|httpie)\b.*(\s-X\s*(POST|PUT|PATCH|DELETE)|\s(-d|--data\S*|-F|--form|-T|--upload-file|--json)\b)/i.test(c)
-    || /\b(scp|rsync|sftp|ftp)\b/.test(c) || /git\s+push\b/.test(c) || /\b(npm|pnpm|yarn)\s+publish\b/.test(c)
-    || /\b(aws\s+s3\s+(cp|sync|mv)|gsutil\s+(cp|rsync)|rclone)\b/.test(c)) {
+  if (isEmailCommand(c)) return { action: 'SEND_EMAIL', destination: 'EXTERNAL_EMAIL' };
+  if (/\b(curl|wget|http|httpie|xh)\b.*(\s-X\s*(POST|PUT|PATCH)|\s(-d|--data\S*|-F|--form\S*|-T|--upload-file|--json|--post-file|--post-data|--body-file)\b|\s\S+=@)/i.test(c)
+    || /\b(scp|rsync|sftp|ftp|lftp|nc|ncat|netcat|socat)\b/.test(c) || /git\s+push\b/.test(c) || /\b(npm|pnpm|yarn)\s+publish\b|\btwine\s+upload\b|\bdocker\s+push\b/.test(c)
+    || /\b(aws\s+s3\s+(cp|sync|mv)|gsutil\s+(cp|rsync|mv)|rclone|azcopy|az\s+storage\s+blob\s+upload)\b/.test(c)
+    || /\bgh\s+(release\s+upload|gist\s+create)\b/.test(c) || /hooks\.slack\.com|discord(app)?\.com\/api\/webhooks/.test(c)) {
     return { action: 'EXPORT_DATA', destination: 'EXTERNAL_API' };
   }
   const parts = bashParts(c);
@@ -75,18 +128,56 @@ function classifyBash(command) {
   return { action: 'WRITE_DATA', destination: 'INTERNAL' };
 }
 
-function classifyMcp(toolName) {
+const COUNT_KEYS = /^(limit|count|max_?results|max_?count|page_?size|per_?page|batch_?size|num_?records|records|rows|quantity|top|first|last|n)$/i;
+const RCPT_KEYS = /^(to|cc|bcc|recipients?|emails?|addresses|attendees|invitees|members|users|user_?ids|channels?)$/i;
+const ID_LIST_KEYS = /(ids|items|records|rows|messages|files|documents|contacts|entries|keys|objects)$/i;
+
+/** Recipients with an email address in an MCP tool input (to/cc/bcc/recipients...). */
+function mcpRecipients(ti) {
+  let n = 0;
+  for (const [k, v] of Object.entries(ti || {})) {
+    if (!RCPT_KEYS.test(k)) continue;
+    const text = Array.isArray(v) ? v.map((x) => (typeof x === 'string' ? x : JSON.stringify(x))).join(',') : typeof v === 'string' ? v : '';
+    n += (text.match(EMAIL_ADDR) || []).length;
+  }
+  return n;
+}
+
+/** Rough number of records an MCP call touches: list lengths, limit/count fields, recipients. */
+export function estimateMcpRecords(ti) {
+  const counts = [];
+  const walk = (v, key, depth) => {
+    if (depth > 3 || v == null) return;
+    if (Array.isArray(v)) {
+      if (ID_LIST_KEYS.test(key) || RCPT_KEYS.test(key) || v.length > 1) counts.push(Math.min(v.length, MAX_RECORDS));
+      for (const x of v.slice(0, 50)) walk(x, key, depth + 1);
+      return;
+    }
+    if (typeof v === 'object') {
+      for (const [k, x] of Object.entries(v)) walk(x, k, depth + 1);
+      return;
+    }
+    if (COUNT_KEYS.test(key) && (typeof v === 'number' || /^\d+$/.test(String(v)))) counts.push(num(v));
+    if (typeof v === 'string' && /^(query|sql|statement)$/i.test(key)) counts.push(estimateBashRecords(v));
+  };
+  walk(ti, '', 0);
+  counts.push(mcpRecipients(ti));
+  return Math.max(1, ...counts.filter(Boolean));
+}
+
+function classifyMcp(toolName, ti = {}) {
   const [, server = 'mcp', ...rest] = toolName.split('__');
   const rawTool = rest.join('__');
   const tool = rawTool.toLowerCase();
   const words = rawTool.split(/[^A-Za-z0-9]+|(?=[A-Z])/).map((w) => w.toLowerCase());
   const has = (re) => words.some((w) => re.test(w));
-  const mailish = /mail|gmail|outlook/i.test(server) || /mail/.test(tool);
+  const mailish = /mail|gmail|outlook|smtp|sendgrid|resend|mailgun|postmark|ses\b|brevo|mailchimp/i.test(server) || /mail/.test(tool) || mcpRecipients(ti) > 0;
+  const sqlish = typeof (ti.sql ?? ti.query) === 'string' ? String(ti.sql ?? ti.query) : '';
   let out;
-  if (has(/^(delete|remove|drop|purge|destroy|trash|archive|revoke|cancel)/)) out = { action: 'DELETE_DATA', destination: 'EXTERNAL_API' };
-  else if (has(/^(send|reply|forward|post|message|notify|email|dm|chat)/)) out = mailish ? { action: 'SEND_EMAIL', destination: 'EXTERNAL_EMAIL' } : { action: 'EXPORT_DATA', destination: 'EXTERNAL_API' };
-  else if (has(/^(export|share|upload|publish|invite|transfer|pay|charge|refund|payout|deploy)/)) out = { action: 'EXPORT_DATA', destination: 'EXTERNAL_API' };
-  else if (has(/^(get|list|search|read|fetch|query|find|describe|lookup|view|show|check|count|retrieve|download)$/)) out = { action: 'READ_DATA', destination: 'EXTERNAL_API' };
+  if (has(/^(delete|remove|drop|purge|destroy|trash|archive|revoke|cancel|truncate)/) || /\b(delete\s+from|drop\s+table|truncate)\b/i.test(sqlish)) out = { action: 'DELETE_DATA', destination: 'EXTERNAL_API' };
+  else if (has(/^(send|reply|forward|post|message|notify|email|dm|chat|draft)/)) out = mailish ? { action: 'SEND_EMAIL', destination: 'EXTERNAL_EMAIL' } : { action: 'EXPORT_DATA', destination: 'EXTERNAL_API' };
+  else if (has(/^(export|share|upload|publish|invite|transfer|pay|charge|refund|payout|deploy|sync|backup|dump)/)) out = mailish && has(/^(share|invite)/) ? { action: 'EXPORT_DATA', destination: 'EXTERNAL_EMAIL' } : { action: 'EXPORT_DATA', destination: 'EXTERNAL_API' };
+  else if (has(/^(get|list|search|read|fetch|query|find|describe|lookup|view|show|check|count|retrieve|download)$/) && !/\b(insert|update|delete|drop|alter|create)\b/i.test(sqlish)) out = { action: 'READ_DATA', destination: 'EXTERNAL_API' };
   else out = { action: 'WRITE_DATA', destination: 'EXTERNAL_API' };
   return { ...out, resource: clip(`mcp:${server}`, 100) };
 }
@@ -101,7 +192,7 @@ export function describe(input, cfg = config()) {
   let content = '';
   if (name === 'Bash' || name === 'PowerShell') {
     const command = String(ti.command || '');
-    ev = { ...classifyBash(command), resource: 'shell' };
+    ev = { ...classifyBash(command), resource: 'shell', records: estimateBashRecords(command) };
     content = command;
   } else if (['Write', 'Edit', 'MultiEdit', 'NotebookEdit'].includes(name)) {
     ev = { action: 'WRITE_DATA', destination: 'INTERNAL', resource: 'local files' };
@@ -110,14 +201,14 @@ export function describe(input, cfg = config()) {
     ev = { action: 'READ_DATA', destination: 'EXTERNAL_API', resource: 'web' };
     content = String(ti.url || '');
   } else if (name.startsWith('mcp__')) {
-    ev = classifyMcp(name);
+    ev = { ...classifyMcp(name, ti), records: estimateMcpRecords(ti) };
     content = JSON.stringify(ti);
   } else {
     ev = { action: 'WRITE_DATA', destination: 'INTERNAL', resource: clip(`tool:${name}`, 100) };
     content = JSON.stringify(ti);
   }
   if (ev.action === 'READ_DATA' && !cfg.checkReads && name !== 'WebFetch') return null;
-  const body = { agent: cfg.agent, action: ev.action, resource: ev.resource, destination: ev.destination, recordsAffected: 1 };
+  const body = { agent: cfg.agent, action: ev.action, resource: ev.resource, destination: ev.destination, recordsAffected: ev.records || 1 };
   const risky = ['SEND_EMAIL', 'EXPORT_DATA', 'DELETE_DATA'].includes(ev.action) || name === 'WebFetch';
   if (content && (cfg.sendContent === 'always' || (cfg.sendContent === 'risky' && risky))) body.content = clip(content, 20000);
   return body;
@@ -132,7 +223,7 @@ async function call(cfg, fetchImpl, method, path, body, idem) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), cfg.timeoutMs);
   try {
-    const headers = { Authorization: `Bearer ${cfg.apiKey}`, 'Content-Type': 'application/json', 'User-Agent': 'vulnify-claude-code-hook/0.1' };
+    const headers = { Authorization: `Bearer ${cfg.apiKey}`, 'Content-Type': 'application/json', 'User-Agent': 'vulnify-claude-code-hook/0.2' };
     if (idem) headers['Idempotency-Key'] = idem;
     const res = await fetchImpl(cfg.baseUrl + path, { method, headers, body: body ? JSON.stringify(body) : undefined, signal: ctrl.signal });
     const json = await res.json().catch(() => ({}));

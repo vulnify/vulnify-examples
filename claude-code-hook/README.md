@@ -11,7 +11,14 @@ Shows: real enforcement in Claude Code. A [`PreToolUse` hook](https://code.claud
 
 No dependencies: one Node 18+ script, `vulnify-hook.mjs`.
 
-## Set it up (2 minutes)
+## Set it up (1 command)
+
+```bash
+npx @vulnify/cli hook claude-code          # this project; add --user for every project, --uninstall to remove
+```
+
+It asks for the API key (hidden) or reads `VULNIFY_API_KEY`, and never prints it. Or set it up by hand:
+
 
 1. Copy `vulnify-hook.mjs` into your project as `.claude/hooks/vulnify-hook.mjs`.
 2. Export a key in the shell you start Claude Code from (don't commit it): `export VULNIFY_API_KEY=vln_...`. A TEST key from app.vulnify.io/api-keys works for trying it out.
@@ -45,18 +52,21 @@ No dependencies: one Node 18+ script, `vulnify-hook.mjs`.
 | Tool call | Vulnify action | destination |
 |---|---|---|
 | `Bash` with `rm`, `DROP TABLE`, `git push --force`, `git reset --hard` | `DELETE_DATA` | `INTERNAL` |
-| `Bash` with `curl -X POST`/`-d`, `scp`, `rsync`, `git push`, `npm publish` | `EXPORT_DATA` | `EXTERNAL_API` |
-| `Bash` with `mail`/`sendmail` | `SEND_EMAIL` | `EXTERNAL_EMAIL` |
+| `Bash` with `curl -X DELETE`, `aws s3 rm`, `kubectl delete` | `DELETE_DATA` | `EXTERNAL_API` |
+| `Bash` with `mail`/`sendmail`/`swaks`/`msmtp`, `curl smtp(s)://`/`--mail-rcpt`, `aws ses send-email`, SendGrid/Mailgun/Resend/Postmark APIs, `smtplib` | `SEND_EMAIL` | `EXTERNAL_EMAIL` |
+| `Bash` with `curl -X POST`/`-d`/`-F`/`-T`, `wget --post-file`, `scp`, `rsync`, `nc`, `git push`, `npm publish`, `aws s3 cp`, `gh release upload`, Slack/Discord webhooks | `EXPORT_DATA` | `EXTERNAL_API` |
 | Other `Bash` that may change things | `WRITE_DATA` | `INTERNAL` |
 | Read-only `Bash` (`ls`, `cat`, `grep`, `git status`, ...) | skipped | |
 | `Write`, `Edit`, `MultiEdit`, `NotebookEdit` | `WRITE_DATA` (resource `local files`) | `INTERNAL` |
 | `WebFetch` | `READ_DATA` (resource `web`) | `EXTERNAL_API` |
-| `mcp__<server>__send_*` / `reply` / `post*` | `SEND_EMAIL` for mail servers, else `EXPORT_DATA` | `EXTERNAL_EMAIL` / `EXTERNAL_API` |
+| `mcp__<server>__send_*` / `reply` / `post*` | `SEND_EMAIL` for mail servers or when `to`/`cc`/`recipients` hold email addresses, else `EXPORT_DATA` | `EXTERNAL_EMAIL` / `EXTERNAL_API` |
 | `mcp__<server>__delete_*` / `remove` / `cancel` | `DELETE_DATA` | `EXTERNAL_API` |
 | `mcp__<server>__export_*` / `share` / `upload` / `pay` | `EXPORT_DATA` | `EXTERNAL_API` |
 | `mcp__<server>__create_*` / `update_*` / other | `WRITE_DATA` | `EXTERNAL_API` |
 | `mcp__<server>__get_*` / `list_*` / `search_*` | skipped (`VULNIFY_HOOK_CHECK_READS=true` to check) | |
 | `Read`, `Glob`, `Grep`, `TodoWrite`, `Task`, `WebSearch`, `mcp__vulnify__*` | skipped | |
+
+`recordsAffected` is estimated: SQL `LIMIT n`, `--limit`/`-n`/`--count n`, `DELETE`/`UPDATE` without `WHERE` or `DROP`/`TRUNCATE` (10,000), the files given to `rm`/`scp` (100 when recursive or a glob), email recipients, and for MCP calls `limit`/`count` fields and the length of id or recipient lists. Otherwise 1.
 
 The resource is `shell`, `local files`, `web`, or `mcp:<server>`. Add policies for those names in app.vulnify.io, for example "`DELETE_DATA` on `shell` goes to REVIEW".
 

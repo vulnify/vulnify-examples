@@ -1,0 +1,19 @@
+{
+  "name": "@vulnify/cli",
+  "version": "0.1.0",
+  "description": "Vulnify CLI: install the fail-closed Vulnify PreToolUse hook into Claude Code with one command.",
+  "license": "MIT",
+  "type": "module",
+  "bin": { "vulnify-cli": "bin/vulnify-cli.mjs" },
+  "files": ["bin", "hook", "README.md"],
+  "engines": { "node": ">=18" },
+  "repository": { "type": "git", "url": "git+https://github.com/vulnify/vulnify-examples.git", "directory": "cli" },
+  "homepage": "https://docs.vulnify.io/mcp/claude-code-hook/",
+  "keywords": ["vulnify", "claude-code", "hooks", "pretooluse", "ai-agents", "guardrails", "security"],
+  "publishConfig": { "access": "public" },
+  "scripts": {
+    "sync-hook": "node -e \"require('fs').mkdirSync('hook',{recursive:true});require('fs').copyFileSync('../claude-code-hook/vulnify-hook.mjs','hook/vulnify-hook.mjs')\"",
+    "prepack": "npm run sync-hook",
+    "test": "npm run sync-hook && node --test"
+  }
+}
