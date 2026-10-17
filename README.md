@@ -5,6 +5,7 @@ Short, runnable examples of putting [Vulnify](https://www.vulnify.io) in front o
 | Example | Stack | What it shows | Model |
 |---|---|---|---|
 | [vercel-ai-sdk/](vercel-ai-sdk/) | Node, `ai` v7 | `guardAiSdkTools`: a tool call is checked before `execute()`; an 800-record external export gets REVIEW and never runs | Stub (`MockLanguageModelV3`) |
+| [claude-code-hook/](claude-code-hook/) | Node, Claude Code | A `PreToolUse` hook: every shell command, file write, WebFetch and MCP tool call is checked; REVIEW/BLOCK deny it, fail closed | None (real Claude Code hook JSON) |
 | [claude-agent-sdk/](claude-agent-sdk/) | Node, Claude Agent SDK | `canUseTool` asks Vulnify before sending email or `rm` | Scripted tool requests |
 | [openai-agents-sdk/](openai-agents-sdk/) | Python, OpenAI Agents SDK | `tool_input_guardrail` rejects tool calls Vulnify doesn't allow | Stub `Model` |
 | [langgraph/](langgraph/) | Python, LangGraph | A `vulnify_check` node; REVIEW goes to an `interrupt()` approval node that pauses for a human | Stub planner |
@@ -15,3 +16,7 @@ Short, runnable examples of putting [Vulnify](https://www.vulnify.io) in front o
 Where an example uses a stub model, the Vulnify checks are still real API calls. Each README says so.
 
 Keys are read from the environment. Use a TEST key from app.vulnify.io/api-keys and never commit real keys.
+
+## Claude skill
+
+[skills/vulnify-guard-actions/SKILL.md](skills/vulnify-guard-actions/SKILL.md) tells Claude to call Vulnify `decide_action` before any consequential action with any connector and to act on ALLOW, REVIEW, or BLOCK. Copy the folder into `~/.claude/skills/` (Claude Code) or upload it as a skill in Claude. It is guidance for the model; the Claude Code hook above is the enforced path.

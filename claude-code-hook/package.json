@@ -1,0 +1,13 @@
+{
+  "name": "claude-code-hook",
+  "version": "1.0.0",
+  "description": "Vulnify as a Claude Code PreToolUse hook: real enforcement before each tool call",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test",
+    "demo": "node --env-file-if-exists=.env demo.mjs"
+  },
+  "engines": { "node": ">=18" }
+}
