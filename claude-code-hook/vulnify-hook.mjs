@@ -53,6 +53,33 @@ function bashParts(command) {
 
 const MAX_RECORDS = 1_000_000;
 const BIG = 10_000; // "the whole table": DELETE without WHERE, DROP, TRUNCATE
+const FS_TREE = 5_000; // a recursive or wildcard filesystem delete: a whole directory tree
+
+/** Files that grant an AI agent permissions, tools or MCP servers. */
+export const AGENT_CONFIG_PATH = /(^|[\\/\s'"=])(\.claude[\\/](settings(\.local)?\.json|commands|agents|hooks)|claude_desktop_config\.json|\.mcp\.json|mcp\.json|\.cursor[\\/](mcp\.json|cli\.json|permissions\.json|rules)|\.vscode[\\/](mcp|settings)\.json|\.codex[\\/]config\.toml|\.gemini[\\/]settings\.json|\.codeium[\\/]windsurf[\\/]mcp_config\.json|\.continue[\\/]config\.(json|ya?ml)|\.aider\.conf\.yml)/i;
+
+/** A recursive or wildcard filesystem delete (rm -rf, rm *, find -delete, find -exec rm, shred -r, git clean -fdx...). */
+export function isTreeDelete(c) {
+  for (const part of bashParts(c)) {
+    const words = part.replace(/^((sudo|doas|nice|nohup|time|command|exec)\s+(-\S+\s+)*)+/, '').split(/\s+/);
+    const cmd = words[0].replace(/^.*\//, '');
+    const args = words.slice(1).filter((w) => w && !w.startsWith('-'));
+    if (['rm', 'shred', 'unlink', 'rmdir', 'Remove-Item', 'del', 'rd'].includes(cmd)) {
+      if (words.some((w) => /^-\w*[rR]/.test(w) || /^--recursive$/.test(w) || /^-Recurse$/i.test(w) || /^\/s$/i.test(w))) return true;
+      if (args.some((a) => /[*?[]/.test(a) || a === '/' || a === '~' || a === '.' || a === '..')) return true;
+    }
+    if (cmd === 'find' && (words.includes('-delete') || /-exec(dir)?\s+(\S*\/)?(rm|shred|unlink)\b/.test(part))) return true;
+    if (cmd === 'xargs' && /\b(rm|shred|unlink)\b/.test(part)) return true;
+    if (cmd === 'git' && /^clean\b/.test(words.slice(1).join(' ')) && words.some((w) => /^-\w*f/.test(w))) return true;
+  }
+  return false;
+}
+
+/** A shell command that writes an agent permission/config file (redirect, tee, sed -i, cp/mv onto it, jq > ...). */
+export function writesAgentConfig(c) {
+  if (!AGENT_CONFIG_PATH.test(c)) return false;
+  return /(>>?|\btee\b|\bsed\s+-i|\bperl\s+-pi|\b(cp|mv|install|ln)\b|\btouch\b|\bcat\s*<<|Set-Content|Out-File|Add-Content)/.test(c);
+}
 const num = (v) => {
   const n = Number(String(v).replace(/[_,]/g, ''));
   return Number.isFinite(n) && n > 0 ? Math.min(Math.floor(n), MAX_RECORDS) : 0;
@@ -70,6 +97,7 @@ export function estimateBashRecords(c) {
   const del = c.match(/\b(delete\s+from|update)\s+[\w."]+([^;'"]*)/i);
   if (del && !/\bwhere\b/i.test(del[2] || '') && !sql) counts.push(BIG);
   for (const m of c.matchAll(/(?:--(?:limit|count|max-results|max-count|page-size|per-page|batch-size|records|rows|number)|(?:^|\s)-n)[=\s]+(\d[\d_,]*)/gi)) counts.push(num(m[1]));
+  if (isTreeDelete(c)) counts.push(FS_TREE);
   for (const m of c.matchAll(/\bseq\s+(?:\d+\s+)?(\d+)/g)) counts.push(num(m[1]));
   for (const m of c.matchAll(/\{\d+\.\.(\d+)\}/g)) counts.push(num(m[1]));
   for (const part of bashParts(c)) {
@@ -79,7 +107,7 @@ export function estimateBashRecords(c) {
     if (['rm', 'shred', 'unlink', 'rmdir'].includes(cmd)) {
       const recursive = words.some((w) => /^-\w*[rR]/.test(w) || w === '--recursive');
       const glob = args.some((a) => /[*?[]/.test(a));
-      counts.push(Math.max(args.length, recursive || glob ? 100 : 0));
+      counts.push(Math.max(args.length, recursive || glob ? FS_TREE : 0));
     }
     if (['scp', 'rsync', 'sftp'].includes(cmd) && args.length > 1) {
       const recursive = words.some((w) => /^-\w*[ra]/.test(w));
@@ -104,11 +132,12 @@ function isEmailCommand(c) {
 
 function classifyBash(command) {
   const c = command;
-  if (/(^|[\s;&|(])(rm|rmdir|shred|unlink)\s/.test(c) || /\b(drop\s+(table|database|schema)|truncate\s+table|delete\s+from)\b/i.test(c)
+  if (isTreeDelete(c) || /(^|[\s;&|(])(rm|rmdir|shred|unlink)\s/.test(c) || /\b(drop\s+(table|database|schema)|truncate\s+table|delete\s+from)\b/i.test(c)
     || /git\s+(push\s+.*(--force|-f\b)|reset\s+--hard|clean\s+-\w*f|branch\s+-D)/.test(c)
     || /\b(curl|http|httpie|xh)\b.*\s-X\s*DELETE\b/i.test(c) || /\baws\s+s3\s+(rm|rb)\b|\bgsutil\s+rm\b|\bkubectl\s+delete\b/.test(c)) {
     return { action: 'DELETE_DATA', destination: /\b(curl|http|httpie|xh|aws|gsutil|kubectl)\b/.test(c) && !/(^|[\s;&|(])rm\s/.test(c) ? 'EXTERNAL_API' : 'INTERNAL' };
   }
+  if (writesAgentConfig(c)) return { action: 'WRITE_DATA', destination: 'INTERNAL' };
   if (isEmailCommand(c)) return { action: 'SEND_EMAIL', destination: 'EXTERNAL_EMAIL' };
   if (/\b(curl|wget|http|httpie|xh)\b.*(\s-X\s*(POST|PUT|PATCH)|\s(-d|--data\S*|-F|--form\S*|-T|--upload-file|--json|--post-file|--post-data|--body-file)\b|\s\S+=@)/i.test(c)
     || /\b(scp|rsync|sftp|ftp|lftp|nc|ncat|netcat|socat)\b/.test(c) || /git\s+push\b/.test(c) || /\b(npm|pnpm|yarn)\s+publish\b|\btwine\s+upload\b|\bdocker\s+push\b/.test(c)
@@ -193,10 +222,16 @@ export function describe(input, cfg = config()) {
   if (name === 'Bash' || name === 'PowerShell') {
     const command = String(ti.command || '');
     ev = { ...classifyBash(command), resource: 'shell', records: estimateBashRecords(command) };
-    content = command;
+    const hints = [];
+    if (isTreeDelete(command)) hints.push('recursive or wildcard filesystem delete');
+    if (writesAgentConfig(command)) { hints.push('writes an agent permission/config file'); ev.agentConfig = true; }
+    content = hints.length ? `# vulnify-hint: ${hints.join('; ')}\n${command}` : command;
   } else if (['Write', 'Edit', 'MultiEdit', 'NotebookEdit'].includes(name)) {
-    ev = { action: 'WRITE_DATA', destination: 'INTERNAL', resource: 'local files' };
-    content = String(ti.content ?? ti.new_string ?? ti.new_source ?? '');
+    const path = String(ti.file_path ?? ti.notebook_path ?? ti.path ?? '');
+    ev = { action: 'WRITE_DATA', destination: 'INTERNAL', resource: 'local files', agentConfig: AGENT_CONFIG_PATH.test(path) };
+    const edits = Array.isArray(ti.edits) ? ti.edits.map((e) => String(e?.new_string ?? '')).join('\n') : '';
+    const body = String(ti.content ?? ti.new_string ?? ti.new_source ?? '') || edits;
+    content = path ? `file_path: ${path}\n${body}` : body;
   } else if (name === 'WebFetch') {
     ev = { action: 'READ_DATA', destination: 'EXTERNAL_API', resource: 'web' };
     content = String(ti.url || '');
@@ -209,8 +244,9 @@ export function describe(input, cfg = config()) {
   }
   if (ev.action === 'READ_DATA' && !cfg.checkReads && name !== 'WebFetch') return null;
   const body = { agent: cfg.agent, action: ev.action, resource: ev.resource, destination: ev.destination, recordsAffected: ev.records || 1 };
-  const risky = ['SEND_EMAIL', 'EXPORT_DATA', 'DELETE_DATA'].includes(ev.action) || name === 'WebFetch';
-  if (content && (cfg.sendContent === 'always' || (cfg.sendContent === 'risky' && risky))) body.content = clip(content, 20000);
+  // Agent config edits always carry path + content: the engine needs them to flag "Agent permission change".
+  const risky = ['SEND_EMAIL', 'EXPORT_DATA', 'DELETE_DATA'].includes(ev.action) || name === 'WebFetch' || !!ev.agentConfig;
+  if (content && (cfg.sendContent === 'always' || (cfg.sendContent === 'risky' && risky) || (cfg.sendContent !== 'never' && ev.agentConfig))) body.content = clip(content, 20000);
   return body;
 }
 

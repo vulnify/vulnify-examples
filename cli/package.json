@@ -1,6 +1,6 @@
 {
   "name": "@vulnify/cli",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Vulnify CLI: install the fail-closed Vulnify PreToolUse hook into Claude Code with one command.",
   "license": "MIT",
   "type": "module",
