@@ -1,0 +1,10 @@
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+
+[mcp_servers.shell]
+command = "uvx"
+args = ["mcp-shell-server"]
+
+[mcp_servers.pinned]
+command = "uvx"
+args = ["mcp-server-fetch==2025.4.7"]

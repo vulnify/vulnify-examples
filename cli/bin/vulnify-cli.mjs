@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
  * npx @vulnify/cli hook claude-code [--user] [--uninstall] [--yes]
+ * npx @vulnify/cli audit [--json] [--fail-on <severity>] [--dir <path>]
  *
  * Installs the fail-closed Vulnify PreToolUse hook into Claude Code settings.
  * The API key comes from VULNIFY_API_KEY or a hidden prompt, and is never printed.
@@ -10,6 +11,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
+import { audit, format, shouldFail, SEVERITIES, CTA } from '../lib/audit.mjs';
 
 const HOOK_FILE = 'vulnify-hook.mjs';
 const MATCHER = 'Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit|WebFetch|mcp__.*';
@@ -162,7 +164,38 @@ export function uninstall({ user, cwd = process.cwd(), home = homedir(), log = c
   log(removed || hadFile || keyRemoved ? `Removed the Vulnify hook (${user ? 'user' : 'project'} scope)${keyRemoved ? ' and the saved API key' : ''}.` : 'No Vulnify hook found here.');
 }
 
+const AUDIT_HELP = `Usage: npx @vulnify/cli audit [options]
+
+Read-only audit of the AI agents on this machine and in this project
+(Claude Code, Cursor, Codex, Claude Desktop, VS Code). No network calls;
+secrets are always masked.
+
+Options:
+  --json                 machine-readable output
+  --fail-on <severity>   exit 1 if any finding is at or above: ${SEVERITIES.join(', ')}
+  --dir <path>           project folder to check (default: current folder)
+  -h, --help             show this help`;
+
+export function runAudit(argv, { log = console.log, err = console.error, home, cwd = process.cwd(), env = process.env, platform = process.platform, color = !!process.stdout.isTTY && !env.NO_COLOR } = {}) {
+  let json = false, failOn = null, dir = cwd;
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '-h' || a === '--help') { log(AUDIT_HELP); return 0; }
+    else if (a === '--json') json = true;
+    else if (a === '--fail-on' || a.startsWith('--fail-on=')) failOn = (a.includes('=') ? a.split('=')[1] : argv[++i] || '').toLowerCase();
+    else if (a === '--dir' || a.startsWith('--dir=')) dir = resolve(cwd, a.includes('=') ? a.split('=')[1] : argv[++i] || '.');
+    else { err(`Unknown option: ${a}\n\n${AUDIT_HELP}`); return 2; }
+  }
+  if (failOn !== null && !SEVERITIES.includes(failOn)) { err(`--fail-on must be one of: ${SEVERITIES.join(', ')}`); return 2; }
+  const h = home || homedir();
+  const result = audit({ home: h, cwd: dir, env, platform });
+  if (json) log(JSON.stringify({ ...result, cta: CTA }, null, 2));
+  else log(format(result, { home: h, cwd: dir, color }));
+  return shouldFail(result, failOn) ? 1 : 0;
+}
+
 const HELP = `Usage: npx @vulnify/cli hook claude-code [options]
+       npx @vulnify/cli audit [--json] [--fail-on <severity>]
 
 Installs the fail-closed Vulnify PreToolUse hook into Claude Code.
 
@@ -175,6 +208,7 @@ Options:
 Docs: ${DOCS}`;
 
 export async function main(argv = process.argv.slice(2)) {
+  if (argv[0] === 'audit') return runAudit(argv.slice(1));
   const flags = new Set(argv.filter((a) => a.startsWith('-')));
   const words = argv.filter((a) => !a.startsWith('-'));
   if (flags.has('-h') || flags.has('--help') || words[0] !== 'hook' || words[1] !== 'claude-code') {

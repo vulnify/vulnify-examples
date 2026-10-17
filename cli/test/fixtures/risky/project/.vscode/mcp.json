@@ -1,0 +1,4 @@
+{
+  // VS Code allows comments
+  "servers": { "fs": { "command": "npx", "args": ["@modelcontextprotocol/server-filesystem@latest", "${userHome}"] } },
+}
