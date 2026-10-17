@@ -22,7 +22,8 @@ test('project install: hook + settings, key in git-ignored settings.local.json, 
   assert.ok(!JSON.stringify(s).includes(KEY), 'key not in committed settings');
   const local = JSON.parse(readFileSync(join(cwd, '.claude/settings.local.json'), 'utf8'));
   assert.equal(local.env.VULNIFY_API_KEY, KEY);
-  assert.equal(statSync(join(cwd, '.claude/settings.local.json')).mode & 0o777, 0o600);
+  // Windows has no POSIX file modes.
+  if (process.platform !== 'win32') assert.equal(statSync(join(cwd, '.claude/settings.local.json')).mode & 0o777, 0o600);
   assert.match(readFileSync(join(cwd, '.gitignore'), 'utf8'), /\.claude\/settings\.local\.json/);
   assert.ok(existsSync(join(cwd, '.claude/hooks/vulnify-hook.mjs')));
   assert.ok(!logs.join('\n').includes(KEY), 'key never printed');

@@ -87,9 +87,13 @@ test('windows: no POSIX mode findings, Windows paths', () => {
   const r = audit({ ...o, platform: 'win32', env: { APPDATA: join(o.home, 'AppData', 'Roaming') } });
   assert.ok(!ids(r).includes('config-world-readable'));
   const l = locations({ home: 'C:\\Users\\g', cwd: 'C:\\p', platform: 'win32', env: { APPDATA: 'C:\\Users\\g\\AppData\\Roaming' } });
-  assert.ok(l.some((x) => x.path.replace(/\\/g, '/').endsWith('AppData/Roaming/Claude/claude_desktop_config.json')));
+  assert.ok(l.some((x) => x.path === 'C:\\Users\\g\\AppData\\Roaming\\Claude\\claude_desktop_config.json'));
+  assert.ok(l.some((x) => x.path === 'C:\\p\\.claude\\settings.json'));
   const m = locations({ home: '/Users/g', cwd: '/p', platform: 'darwin', env: {} });
   assert.ok(m.some((x) => x.path === '/Users/g/Library/Application Support/Claude/claude_desktop_config.json'));
+  const x = locations({ home: '/home/g', cwd: '/p', platform: 'linux', env: {} });
+  assert.ok(x.some((y) => y.path === '/home/g/.config/Claude/claude_desktop_config.json'));
+  assert.ok(x.some((y) => y.path === '/etc/claude-code/managed-settings.json'));
 });
 
 test('helpers', () => {

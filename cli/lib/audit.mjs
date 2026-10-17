@@ -5,7 +5,7 @@
  */
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, join, relative, resolve, sep } from 'node:path';
+import { basename, join, posix, relative, resolve, sep, win32 } from 'node:path';
 
 export const SEVERITIES = ['low', 'medium', 'high', 'critical'];
 const WEIGHT = { critical: 25, high: 15, medium: 7, low: 3 };
@@ -101,6 +101,8 @@ function splitTop(s) {
 // ---------- discovery ----------
 /** Every config location we know, per tool. Paths confirmed against each tool's docs (Oct 2026). */
 export function locations({ home = homedir(), cwd = process.cwd(), platform = process.platform, env = process.env } = {}) {
+  // Build paths for the target OS, not the host (so a simulated win32/darwin run is correct anywhere).
+  const join = (platform === 'win32' ? win32 : posix).join;
   const claudeHome = env.CLAUDE_CONFIG_DIR || join(home, '.claude');
   const codexHome = env.CODEX_HOME || join(home, '.codex');
   const appData = env.APPDATA || join(home, 'AppData', 'Roaming');
