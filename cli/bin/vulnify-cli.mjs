@@ -194,12 +194,14 @@ export function runAudit(argv, { log = console.log, err = console.error, home, c
   return shouldFail(result, failOn) ? 1 : 0;
 }
 
-const HELP = `Usage: npx @vulnify/cli hook claude-code [options]
-       npx @vulnify/cli audit [--json] [--fail-on <severity>]
+const HELP = `Usage: npx @vulnify/cli audit [--json] [--fail-on <severity>] [--dir <path>]
+       npx @vulnify/cli hook claude-code [options]
 
-Installs the fail-closed Vulnify PreToolUse hook into Claude Code.
+Commands:
+  audit                 read-only, local audit of AI agent configs (see: audit --help)
+  hook claude-code      install the fail-closed Vulnify PreToolUse hook into Claude Code
 
-Options:
+Hook options:
   --user        install in ~/.claude (every project) instead of ./.claude
   --uninstall   remove the hook (and a key this tool saved)
   --yes         no prompts; needs VULNIFY_API_KEY in the environment

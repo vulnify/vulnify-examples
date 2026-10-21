@@ -1,7 +1,7 @@
 /**
  * vulnify audit: a local, read-only audit of the AI agents configured on this machine
  * and in the current project. It reads config files, never writes, never runs a server,
- * and makes no network calls. Secrets are always masked (first 4 characters + ***).
+ * and makes no network calls. Secrets are always masked (first 4 characters + ****; values under 12 characters show only ****).
  */
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -11,7 +11,7 @@ export const SEVERITIES = ['low', 'medium', 'high', 'critical'];
 const WEIGHT = { critical: 25, high: 15, medium: 7, low: 3 };
 const MAX_BYTES = 2 * 1024 * 1024;
 
-export const mask = (s) => `${String(s).slice(0, 4)}***`;
+export const mask = (s) => (String(s).length < 12 ? '****' : `${String(s).slice(0, 4)}****`);
 
 // ---------- secret patterns ----------
 const TOKEN_PATTERNS = [
@@ -141,6 +141,8 @@ export function locations({ home = homedir(), cwd = process.cwd(), platform = pr
     // VS Code / Copilot
     { tool: 'VS Code', kind: 'mcp', scope: 'project', path: p('.vscode/mcp.json') },
     { tool: 'VS Code', kind: 'mcp', scope: 'user', path: join(vscodeUser, 'mcp.json') },
+    { tool: 'VS Code', kind: 'vscode-settings', scope: 'user', path: join(vscodeUser, 'settings.json') },
+    { tool: 'VS Code', kind: 'vscode-settings', scope: 'project', path: p('.vscode/settings.json') },
     { tool: 'VS Code', kind: 'mcp', scope: 'user', path: join(env.COPILOT_HOME || join(home, '.copilot'), 'mcp-config.json') },
     { tool: 'VS Code', kind: 'instructions', scope: 'project', path: p('.github/copilot-instructions.md') },
   ];
@@ -183,6 +185,7 @@ const R = {
   'project-dotenv': { severity: 'medium', title: '.env file in the project', why: 'Agents working here can read it unless denied, and it ends up in context, logs and generated code.', fix: 'Keep it git-ignored, deny Read(./.env*) for agents, and prefer a secrets manager for real credentials.' },
   'config-token': { severity: 'high', title: 'Token in an agent config file', why: 'Agent configs are often committed, synced and readable by every agent and extension on the machine.', fix: 'Remove the token from the file, load it from the environment or a keychain, and rotate it.' },
   'instructions-injection': { severity: 'high', title: 'Suspicious text in an agent instruction file', why: 'Instruction files are obeyed on every session. Hidden or "ignore the rules" text is how repos hijack agents and exfiltrate data.', fix: 'Read the file, remove the text, and check where it came from (cloned repo, PR, package).' },
+  'mcp-injection': { severity: 'high', title: 'Suspicious text in an MCP server description', why: 'Server descriptions and instructions are read by the agent as context, so injected text there can steer it into running commands or leaking data.', fix: 'Remove the text, or remove the server and check where its config came from.' },
   'config-world-readable': { severity: 'medium', title: 'Agent config readable by other users', why: 'Other accounts and processes on this machine can read the config and any keys or tokens in it.', fix: 'chmod 600 the file (and 700 its folder).' },
 };
 export const RULES = R;
@@ -252,6 +255,13 @@ function checkServer(add, file, text, name, def) {
     const bearer = /^Bearer\s+(\S{8,})$/i.exec(v);
     if (tok || bearer || (SECRET_NAME.test(k) && v.length >= 8 && !/\$\{/.test(v)))
       add('mcp-plaintext-secret', file, where(k), `server "${name}", ${k} = ${mask(tok ? tok.value : bearer ? bearer[1] : v)}`, (tok || bearer || { value: v }).value);
+  }
+  for (const k of ['description', 'instructions', 'prompt', 'systemPrompt']) {
+    const v = def[k];
+    if (typeof v !== 'string') continue;
+    const inv = INVISIBLE.exec(v);
+    const hit = INJECTION.find(([re]) => re.test(v));
+    if (inv || hit) add('mcp-injection', file, where(k), `server "${name}" ${k}: ${hit ? hit[1] : `invisible Unicode U+${inv[0].codePointAt(0).toString(16).toUpperCase().padStart(4, '0')}`}`);
   }
   const done = new Set();
   args.forEach((a, i) => {
@@ -363,6 +373,10 @@ export function audit({ home = homedir(), cwd = process.cwd(), platform = proces
           }
         }
         if (loc.kind === 'claude-json' && cfg.bypassPermissionsModeAccepted === true) { /* informational only */ }
+        if (loc.kind === 'vscode-settings') {
+          if (cfg.mcp && typeof cfg.mcp === 'object') for (const [name, def] of servers(cfg.mcp)) checkServer(add, path, text, name, def);
+          for (const k of ['chat.tools.autoApprove', 'chat.tools.global.autoApprove']) if (cfg[k] === true) add('perm-bypass', path, lineOf(text, `"${k}"`), `${k} = true (every tool call runs without asking)`);
+        }
         if (loc.kind === 'cursor-cli') checkPermissions(add, path, text, Array.isArray(cfg.permissions?.allow) ? cfg.permissions.allow : [], 'Shell');
         if (loc.kind === 'codex') {
           const ap = cfg.approval_policy, sb = cfg.sandbox_mode;
@@ -415,7 +429,8 @@ export function audit({ home = homedir(), cwd = process.cwd(), platform = proces
 }
 
 // ---------- output ----------
-export const CTA = 'Turn these into enforced policies: npx @vulnify/cli hook claude-code / vulnify.io';
+export const CTA_URL = 'https://www.vulnify.io/?utm_source=cli&utm_medium=tool&utm_campaign=audit';
+export const CTA = `Turn these findings into enforced runtime policies with Vulnify: ${CTA_URL}`;
 export function format(result, { home = homedir(), cwd = process.cwd(), color = false } = {}) {
   const c = (code, s) => (color ? `\x1b[${code}m${s}\x1b[0m` : s);
   const SEV = { critical: '1;31', high: '31', medium: '33', low: '36' };

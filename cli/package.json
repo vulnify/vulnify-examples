@@ -1,11 +1,11 @@
 {
   "name": "@vulnify/cli",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Vulnify CLI: audit the AI agents on your machine (read-only, local) and install the fail-closed Vulnify hook into Claude Code.",
   "license": "MIT",
   "type": "module",
   "bin": { "vulnify-cli": "bin/vulnify-cli.mjs" },
-  "files": ["bin", "lib", "hook", "README.md"],
+  "files": ["bin", "lib", "hook", "README.md", "CHANGELOG.md"],
   "engines": { "node": ">=18" },
   "repository": { "type": "git", "url": "git+https://github.com/vulnify/vulnify-examples.git", "directory": "cli" },
   "homepage": "https://docs.vulnify.io/mcp/claude-code-hook/",
