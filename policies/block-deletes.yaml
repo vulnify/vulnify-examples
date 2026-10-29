@@ -1,0 +1,18 @@
+# Makes the production-database delete in these examples come back BLOCK.
+# spec.action is the family. The event action DELETE_DATA goes in condition.action.
+# spec.resource is a resource type, not the name "Production Database".
+# This matches every DELETE_DATA. The demos send records_affected: 1, so a
+# minRecords rule for large deletes does not match them.
+apiVersion: vulnify.io/v1
+kind: Policy
+metadata:
+  name: block-deletes
+spec:
+  description: Block every DELETE_DATA, including the production database delete in the examples.
+  enabled: true
+  action: DELETE
+  resource: ANY
+  condition:
+    action: DELETE_DATA
+  decision: BLOCK
+  mode: ENFORCE

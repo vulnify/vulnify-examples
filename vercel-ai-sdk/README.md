@@ -24,9 +24,33 @@ node --env-file-if-exists=.env index.mjs --mock
 npm test             # offline
 ```
 
-Mock mode does not call the API. It applies the demo policy in `mock.mjs`, so you see all three outcomes.
+Mock mode (`node index.mjs --mock`, or no key) does not call the API. `mock.mjs` BLOCKs a delete whose resource name contains "production", so this run shows BLOCK with no policy.
 
-With a TEST key, the same three descriptions go to `https://api.vulnify.io` through `Vulnify.guard`. On a new organization the risk engine allows the read and sends the 800-record external export to REVIEW (measured score 65: export, external destination, 800 records). A production delete is BLOCK once a DELETE policy in the app says so. Until that policy exists, the API's own score decides, and the mock is what shows BLOCK. Register `Project Files`, `Customer Database`, and `Production Database` if a check reports an unknown resource.
+Live mode (`npm start` with a real `VULNIFY_API_KEY`) posts the three checks through `Vulnify.guard`. On a new organization the risk engine ALLOWs the read and sends the 800-record external export to REVIEW (measured score 65: export, external destination, 800 records). It does not BLOCK the production delete. That call is `DELETE_DATA` on `Production Database` with `recordsAffected` 1, and a small delete is often ALLOW. BLOCK shows up only after a policy matches it.
+
+The Node client has no method that creates a policy. In the app at https://app.vulnify.io, open Policies and create:
+
+| Field | Value |
+|---|---|
+| Name | `block-deletes` |
+| Action family | `DELETE` |
+| Resource type | `ANY` |
+| Condition action | `DELETE_DATA` |
+| Decision | `BLOCK` |
+| Mode | `ENFORCE` |
+
+The same rule is [policies/block-deletes.yaml](../policies/block-deletes.yaml). It matches every `DELETE_DATA`, not only the name `Production Database`. A policy file has no field for that name (`spec.resource` is a type such as `ANY`). A rule that only blocks large deletes does not match this demo, because `recordsAffected` is 1.
+
+Apply the file with an org-wide LIVE key. The TEST key in `.env` runs the checks and is not enough for `apply`. From the repo root:
+
+```bash
+npx -p @vulnify/sdk@0.3.3 vulnify policies validate policies/block-deletes.yaml
+npx -p @vulnify/sdk@0.3.3 vulnify policies apply policies/block-deletes.yaml
+```
+
+Run `npm start` again. The delete comes back BLOCK.
+
+Register `Project Files`, `Customer Database`, and `Production Database` if a check reports an unknown resource.
 
 `action` is one of `READ_DATA`, `WRITE_DATA`, `DELETE_DATA`, `EXPORT_DATA`, `SEND_EMAIL`. `destination` is one of `INTERNAL`, `EXTERNAL_EMAIL`, `EXTERNAL_API`.
 

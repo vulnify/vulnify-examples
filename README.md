@@ -19,7 +19,18 @@ Each folder has a README, a gitignored `.env` for a TEST key from https://app.vu
 | [slack-review/](slack-review/) | Python | An 800-record external export gets REVIEW, then waits for Approve or Deny in Slack. |
 | [tinyfish/](tinyfish/) | Python, TinyFish | A web agent fills out a form only after a Vulnify check. |
 
-Mock mode is the path that runs here without a key. With a TEST key, the same calls go to `https://api.vulnify.io`. On a new organization the risk engine allows a small read and sends the 800-record external export to REVIEW. Deleting a production database is BLOCK once a DELETE policy in the app says so. Until that policy exists, the API's own score decides, and mock mode is what shows BLOCK.
+Mock mode does not call the API. It applies a local demo rule, so the production delete is BLOCK. A TEST key does not do that. The risk engine ALLOWs the read and sends the 800-record external export to REVIEW. The delete is `DELETE_DATA` with `records_affected` 1, and that score is often ALLOW until a policy BLOCKs `DELETE_DATA`.
+
+The SDK clients have no method that creates a policy. In the app at https://app.vulnify.io, open Policies and create `block-deletes`: action family `DELETE`, resource type `ANY`, condition action `DELETE_DATA`, decision `BLOCK`, mode `ENFORCE`. The file is [policies/block-deletes.yaml](policies/block-deletes.yaml). It matches every `DELETE_DATA`, not only the resource name `Production Database`. A policy file has no field for that name. A rule that only blocks large deletes does not match these demos.
+
+`apply` needs an org-wide LIVE key. The TEST key used to run an example is not enough.
+
+```bash
+npx -p @vulnify/sdk@0.3.3 vulnify policies validate policies/block-deletes.yaml
+npx -p @vulnify/sdk@0.3.3 vulnify policies apply policies/block-deletes.yaml
+```
+
+Python: `pip install "vulnify[cli]==0.4.2"`, then `vulnify policies validate policies/block-deletes.yaml` and `vulnify policies apply policies/block-deletes.yaml`. Run the example again with the TEST key. The delete comes back BLOCK.
 
 Keys stay in `.env`. Do not commit them.
 

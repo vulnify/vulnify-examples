@@ -32,7 +32,31 @@ npm test
 npx @vulnify/cli audit
 ```
 
-Mock mode does not call the API. A production `DROP DATABASE` is BLOCK in that demo policy. With a TEST key, the hook posts the same events and prints the API's decision. A delete is BLOCK once a DELETE policy in the app says so. Until then, the API's own score decides.
+Mock mode (`node demo.mjs --mock`, or no key) does not call the API. `demo.mjs` BLOCKs the command `DROP DATABASE production`, so this run shows BLOCK with no policy.
+
+Live mode (`node --env-file-if-exists=.env demo.mjs` with a real `VULNIFY_API_KEY`) posts the three events. The read is ALLOW and the 800-record upload is REVIEW from the risk engine. The drop is `DELETE_DATA` on resource `shell` (the hook estimates about 10000 records). It is not BLOCK until a policy matches `DELETE_DATA`. Until then the risk engine decides.
+
+The hook script has no method that creates a policy. In the app at https://app.vulnify.io, open Policies and create:
+
+| Field | Value |
+|---|---|
+| Name | `block-deletes` |
+| Action family | `DELETE` |
+| Resource type | `ANY` |
+| Condition action | `DELETE_DATA` |
+| Decision | `BLOCK` |
+| Mode | `ENFORCE` |
+
+The same rule is [policies/block-deletes.yaml](../policies/block-deletes.yaml). It matches every `DELETE_DATA`, including this drop. A policy file has no field for the words "production database" (`spec.resource` is a type such as `ANY`).
+
+Apply the file with an org-wide LIVE key. The TEST key in `.env` runs the hook and is not enough for `apply`. From the repo root:
+
+```bash
+npx -p @vulnify/sdk@0.3.3 vulnify policies validate policies/block-deletes.yaml
+npx -p @vulnify/sdk@0.3.3 vulnify policies apply policies/block-deletes.yaml
+```
+
+Run the demo again with the TEST key. The drop comes back BLOCK.
 
 The audit checks the agent config files on this machine and in the current directory. It does not use an API key.
 
