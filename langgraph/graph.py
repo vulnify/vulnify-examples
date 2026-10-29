@@ -1,61 +1,122 @@
-"""LangGraph + Vulnify: plan -> vulnify_check -> (REVIEW: human_approval interrupt) -> execute."""
+"""LangChain tools inside a LangGraph agent. Vulnify gates every tool call."""
 import os
-from typing import Optional, TypedDict
+from typing import Annotated
 
-from langgraph.checkpoint.memory import InMemorySaver
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.tools import tool
 from langgraph.graph import END, START, StateGraph
-from langgraph.types import interrupt
+from langgraph.graph.message import add_messages
+from langgraph.prebuilt import ToolNode, tools_condition
+from typing_extensions import TypedDict
+from vulnify.adapters import langgraph_tool_guard
 
 AGENT = os.environ.get("VULNIFY_AGENT", "support-agent")
 EXECUTED: list[str] = []
 
-
-class State(TypedDict, total=False):
-    request: str
-    action: dict
-    decision: str
-    event_id: Optional[str]
-    reasons: list[str]
-    approved: bool
-    result: str
+PROMPT = (
+    "Read README.md, export 800 customer records to partner@example.com, "
+    "and delete the production database."
+)
 
 
-def plan(state: State) -> State:
-    """Stub planner (stands in for an LLM): turns the request into one proposed action."""
-    return {"action": dict(agent=AGENT, action="EXPORT_DATA", resource="customers",
-                           destination="EXTERNAL_EMAIL", records_affected=800)}
+class State(TypedDict):
+    messages: Annotated[list, add_messages]
 
 
-def build(vulnify):
-    def vulnify_check(state: State) -> State:
-        d = vulnify.check(**state["action"])
-        return {"decision": d.final_decision or d.decision, "event_id": d.id, "reasons": list(d.reasons)}
+@tool
+def read_file(path: str) -> str:
+    """Read one file in the project."""
+    EXECUTED.append(f"read_file {path}")
+    return f"contents of {path}"
 
-    def human_approval(state: State) -> State:
-        # Pauses the graph. The run resumes with Command(resume={"approved": True|False}).
-        answer = interrupt({"event_id": state["event_id"], "reasons": state["reasons"],
-                            "question": "Vulnify says REVIEW. Approve this action?"})
-        return {"approved": bool(answer.get("approved"))}
 
-    def execute(state: State) -> State:
-        a = state["action"]
-        EXECUTED.append(f"{a['action']} {a['records_affected']} {a['resource']} -> {a['destination']}")
-        return {"result": "executed"}
+@tool
+def export_customers(email: str, rows: int) -> str:
+    """Export customer records and email them to an address."""
+    EXECUTED.append(f"export_customers {rows} -> {email}")
+    return f"exported {rows} customers to {email}"
 
-    def stop(state: State) -> State:
-        return {"result": f"not executed ({state['decision']}{', denied by human' if state.get('decision') == 'REVIEW' else ''})"}
 
-    def route(state: State) -> str:
-        return {"ALLOW": "execute", "REVIEW": "human_approval"}.get(state["decision"], "stop")
+@tool
+def delete_production_database(confirm: bool) -> str:
+    """Delete the production database."""
+    if not confirm:
+        return "not deleted"
+    EXECUTED.append("delete_production_database")
+    return "deleted production database"
 
-    g = StateGraph(State)
-    for name, fn in [("plan", plan), ("vulnify_check", vulnify_check), ("human_approval", human_approval),
-                     ("execute", execute), ("stop", stop)]:
-        g.add_node(name, fn)
-    g.add_edge(START, "plan")
-    g.add_edge("plan", "vulnify_check")
-    g.add_conditional_edges("vulnify_check", route, ["execute", "human_approval", "stop"])
-    g.add_conditional_edges("human_approval", lambda s: "execute" if s["approved"] else "stop", ["execute", "stop"])
-    g.add_edge("execute", END)
-    g.add_edge("stop", END)
-    return g.compile(checkpointer=InMemorySaver())
+
+def describe_read(_args: dict) -> dict:
+    return {
+        "agent": AGENT,
+        "action": "READ_DATA",
+        "resource": "Project Files",
+        "destination": "INTERNAL",
+        "records_affected": 1,
+    }
+
+
+def describe_export(args: dict) -> dict:
+    return {
+        "agent": AGENT,
+        "action": "EXPORT_DATA",
+        "resource": "Customer Database",
+        "destination": "EXTERNAL_EMAIL",
+        "records_affected": int(args.get("rows") or 0),
+    }
+
+
+def describe_delete(_args: dict) -> dict:
+    return {
+        "agent": AGENT,
+        "action": "DELETE_DATA",
+        "resource": "Production Database",
+        "records_affected": 1,
+    }
+
+
+DESCRIBE = {
+    "read_file": describe_read,
+    "export_customers": describe_export,
+    "delete_production_database": describe_delete,
+}
+
+TOOLS = [read_file, export_customers, delete_production_database]
+
+PLANNED = [
+    {"name": "read_file", "args": {"path": "README.md"}, "id": "c1"},
+    {"name": "export_customers", "args": {"email": "partner@example.com", "rows": 800}, "id": "c2"},
+    {"name": "delete_production_database", "args": {"confirm": True}, "id": "c3"},
+]
+
+
+def build(vulnify, wait=None):
+    """A two-node agent. The planner is scripted so the demo needs no model key.
+
+    ``wait={"timeout": 120}`` holds a REVIEW until a person approves it in Vulnify
+    or in Slack. Omit it and REVIEW comes back immediately, with the tool unrun.
+    """
+    guard = langgraph_tool_guard(vulnify, DESCRIBE, wait=wait)
+
+    def plan(state: State) -> dict:
+        if any(isinstance(message, ToolMessage) for message in state["messages"]):
+            return {"messages": [AIMessage(content="Done.")]}
+        return {"messages": [AIMessage(content="", tool_calls=PLANNED)]}
+
+    graph = StateGraph(State)
+    graph.add_node("agent", plan)
+    graph.add_node("tools", ToolNode(TOOLS, wrap_tool_call=guard))
+    graph.add_edge(START, "agent")
+    graph.add_conditional_edges("agent", tools_condition, ["tools", END])
+    graph.add_edge("tools", "agent")
+    return graph.compile()
+
+
+def run(vulnify, wait=None):
+    EXECUTED.clear()
+    result = build(vulnify, wait=wait).invoke({"messages": [HumanMessage(content=PROMPT)]})
+    rows = []
+    for message in result["messages"]:
+        if isinstance(message, ToolMessage):
+            rows.append({"tool": message.name, "output": message.content, "status": message.status})
+    return rows

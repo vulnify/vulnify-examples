@@ -1,38 +1,33 @@
 # Vercel AI SDK + Vulnify
 
-Shows: every tool call is checked by Vulnify **before** its `execute()` runs, using `guardAiSdkTools` from [`@vulnify/sdk`](https://www.npmjs.com/package/@vulnify/sdk). A customer lookup is allowed. Exporting 800 customers to an outside email gets REVIEW, so the export never runs, and the model gets a "blocked" tool result instead.
+Shows: tools passed to `generateText`, wrapped with `guardAiSdkTools` from [`@vulnify/sdk`](https://www.npmjs.com/package/@vulnify/sdk). Vulnify answers before `execute` runs. ALLOW returns the tool result. REVIEW and BLOCK return `{ blocked: true, decision, reasons, eventId, message }` and `execute` does not run.
 
-> **Stub model, real Vulnify.** The LLM here is the AI SDK's `MockLanguageModelV3` scripted to request both tools, so you need no model API key. The Vulnify checks are real API calls. To use a real model, pass e.g. `openai('gpt-4.1')` to `run()`.
+The model is `MockLanguageModelV3`, scripted to request three tools, so there is no model API key. Pass a real model, for example `openai('gpt-4.1')`, to `run()` when you want one.
 
-## Run it (2 minutes)
+| Tool | What Vulnify is told | Result |
+|---|---|---|
+| `readFile` | `READ_DATA` on `Project Files`, 1 record | ALLOW. The file is read. |
+| `exportCustomers` | `EXPORT_DATA` of 800 records to `EXTERNAL_EMAIL` | REVIEW. Held for a person. The export does not run. |
+| `deleteProductionDatabase` | `DELETE_DATA` on `Production Database` | BLOCK. The delete does not run. |
+
+A person approves or denies a REVIEW in the [Vulnify app](https://app.vulnify.io) or in Slack. Pass `{ wait: { timeoutMs: 120000 } }` as the fourth argument of `guardAiSdkTools` when this process should wait for that answer. This demo omits `wait`, so REVIEW returns at once.
+
+## Setup
+
+1. Sign up at https://app.vulnify.io and create a TEST key. Copy `.env.example` to `.env` (gitignored) and paste the key there.
+2. Install the pinned packages: `npm install`
+3. Run it:
 
 ```bash
-npm install
-cp .env.example .env   # add a TEST key from app.vulnify.io/api-keys
-npm start
-npm test               # offline, no key needed
+npm start            # mock mode when .env has no real key; live when VULNIFY_API_KEY is set
+node --env-file-if-exists=.env index.mjs --mock
+npm test             # offline
 ```
 
-Set `VULNIFY_AGENT` to an agent that already exists in your org. A new name registers on first use and counts toward your plan's agent limit.
+Mock mode does not call the API. It applies the demo policy in `mock.mjs`, so you see all three outcomes.
 
-## Expected output
+With a TEST key, the same three descriptions go to `https://api.vulnify.io` through `Vulnify.guard`. On a new organization the risk engine allows the read and sends the 800-record external export to REVIEW (measured score 65: export, external destination, 800 records). A production delete is BLOCK once a DELETE policy in the app says so. Until that policy exists, the API's own score decides, and the mock is what shows BLOCK. Register `Project Files`, `Customer Database`, and `Production Database` if a check reports an unknown resource.
 
-```
-lookupCustomer: ran -> {"email":"ana@example.com","plan":"TEAM"}
-exportCustomers: NOT RUN, Vulnify REVIEW (event 606a8eec-…): Export operation; External destination; Large data volume (800 records)
-side effects: [ 'lookupCustomer ana@example.com' ]
-```
+`action` is one of `READ_DATA`, `WRITE_DATA`, `DELETE_DATA`, `EXPORT_DATA`, `SEND_EMAIL`. `destination` is one of `INTERNAL`, `EXTERNAL_EMAIL`, `EXTERNAL_API`.
 
-On a fresh org the score is 65 (export 30 + external 25 + over 100 records 10), which means REVIEW. With a policy that blocks external exports you get BLOCK. Open the event in app.vulnify.io to approve or deny it. To wait for that review instead of failing fast, pass `{ wait: { timeoutMs } }` as the guard options.
-
-## How it works
-
-```js
-const tools = guardAiSdkTools(vulnify, rawTools, {
-  exportCustomers: ({ count }) => ({ agent, action: 'EXPORT_DATA', resource: 'customers', destination: 'EXTERNAL_EMAIL', recordsAffected: count }),
-});
-```
-
-The valid values for `action` are `READ_DATA`, `WRITE_DATA`, `DELETE_DATA`, `EXPORT_DATA` and `SEND_EMAIL`. The valid values for `destination` are `INTERNAL`, `EXTERNAL_EMAIL` and `EXTERNAL_API`.
-
-Tested live on 2026-10-16 against a Vulnify TEST organization with `ai@7.0.143` and `@vulnify/sdk@0.3.3`.
+Packages: `@vulnify/sdk@0.3.3`, `ai@7.0.143`, `zod@4.6.7`.

@@ -6,8 +6,10 @@
   "private": true,
   "license": "MIT",
   "scripts": {
+    "start": "node --env-file-if-exists=.env demo.mjs",
     "test": "node --test",
-    "demo": "node --env-file-if-exists=.env demo.mjs"
+    "demo": "node --env-file-if-exists=.env demo.mjs",
+    "audit": "npx --yes @vulnify/cli@0.3.0 audit"
   },
   "engines": { "node": ">=18" }
 }

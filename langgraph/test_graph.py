@@ -1,33 +1,26 @@
-from types import SimpleNamespace
-
-from langgraph.types import Command
+from langchain_core.messages import ToolMessage
 
 import graph
+from mock_client import MockVulnify
 
 
-class Fake:
-    def __init__(self, decision):
-        self.decision = decision
-
-    def check(self, **a):
-        return SimpleNamespace(id="evt", decision=self.decision, final_decision=self.decision, reasons=["test"])
-
-
-def run(decision, resume=None):
-    graph.EXECUTED.clear()
-    app, cfg = graph.build(Fake(decision)), {"configurable": {"thread_id": decision + str(resume)}}
-    out = app.invoke({"request": "x"}, cfg)
-    if resume is not None:
-        assert "__interrupt__" in out
-        out = app.invoke(Command(resume={"approved": resume}), cfg)
-    return out
+def test_read_is_allowed_export_is_held_delete_is_blocked():
+    fake = MockVulnify()
+    rows = graph.run(fake)
+    by_tool = {row["tool"]: row["output"] for row in rows}
+    assert by_tool["read_file"] == "contents of README.md"
+    assert by_tool["export_customers"].startswith("Vulnify REVIEW")
+    assert "800" in by_tool["export_customers"]
+    assert by_tool["delete_production_database"].startswith("Vulnify BLOCK")
+    assert graph.EXECUTED == ["read_file README.md"]
+    assert {call["action"] for call in fake.seen} == {"READ_DATA", "EXPORT_DATA", "DELETE_DATA"}
+    assert next(call["records_affected"] for call in fake.seen if call["action"] == "EXPORT_DATA") == 800
 
 
-def test_review_pauses_and_only_runs_when_approved():
-    assert run("REVIEW", True)["result"] == "executed" and len(graph.EXECUTED) == 1
-    assert run("REVIEW", False)["result"].startswith("not executed") and graph.EXECUTED == []
-
-
-def test_allow_runs_and_block_stops_without_a_human():
-    assert run("ALLOW")["result"] == "executed"
-    assert run("BLOCK")["result"] == "not executed (BLOCK)"
+def test_blocked_tool_message_is_an_error():
+    result = graph.build(MockVulnify()).invoke({"messages": []})
+    # The planner runs first and emits tool calls, so the graph always has tool results.
+    statuses = {message.name: message.status for message in result["messages"] if isinstance(message, ToolMessage)}
+    assert statuses["read_file"] != "error"
+    assert statuses["export_customers"] == "error"
+    assert statuses["delete_production_database"] == "error"

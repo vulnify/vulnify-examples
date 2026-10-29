@@ -1,33 +1,37 @@
 # OpenAI Agents SDK (Python) + Vulnify
 
-Shows: a `tool_input_guardrail` that asks Vulnify before each risky `function_tool` runs. On ALLOW the tool runs. On REVIEW or BLOCK, the call is rejected and the model gets the reasons and the event id instead of a result.
+Shows: each `function_tool` wrapped with `guard_openai_agents_tool` from `vulnify.adapters`, then handed to an `Agent`. The real `Runner` executes the tool only when Vulnify returns ALLOW. On REVIEW or BLOCK the model receives the reason text and the tool body does not run.
 
-> **Stub model, real Vulnify.** `StubModel` is a scripted `agents.models.interface.Model` that requests three tool calls. The real `Runner` and the guardrails run as normal, and the Vulnify checks are real API calls. You don't need an OpenAI key. To use a real model, pass `model="gpt-4.1"` to `Agent(...)`.
+`StubModel` requests the three calls, so there is no OpenAI key. Pass `model="gpt-4.1"` to `Agent(...)` when you want a live model.
 
-## Run it (2 minutes)
+| Tool | What Vulnify is told | Result |
+|---|---|---|
+| `read_file` | `READ_DATA` on `Project Files`, 1 record | ALLOW. The file is read. |
+| `export_customers` | `EXPORT_DATA` of 800 records to `EXTERNAL_EMAIL` | REVIEW. Held for a person. The export does not run. |
+| `delete_production_database` | `DELETE_DATA` on `Production Database` | BLOCK. The delete does not run. |
+
+A person approves or denies a REVIEW in the [Vulnify app](https://app.vulnify.io) or in Slack. Pass `wait={"timeout": 120}` to `guard_openai_agents_tool` when this process should wait for that answer.
+
+## Setup
+
+1. Sign up at https://app.vulnify.io and create a TEST key. Copy `.env.example` to `.env` (gitignored) and paste the key there.
+2. Install the pinned packages:
 
 ```bash
 python -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env && set -a && . ./.env && set +a   # add a TEST key from app.vulnify.io/api-keys
-python main.py
-pytest -q        # offline, no key needed
 ```
 
-Set `VULNIFY_AGENT` to an agent that already exists in your org. New names register on first use and count toward your plan's agent limit.
+3. Run it:
 
-## Expected output
-
-```
-send_email team@acme.internal: sent
-send_email someone@gmail.com: Vulnify REVIEW (event …): Write operation; Sensitive data detected in content: CPF; External destination; … Not executed; ask the user.
-delete_records customers: deleted
-side effects: ['send_email -> team@acme.internal', 'delete_records 800 from customers']
+```bash
+python main.py     # mock mode when .env has no real key; live when VULNIFY_API_KEY is set
+python main.py --mock
+pytest -q          # offline
 ```
 
-- The external email contains a CPF, so it goes to REVIEW and never runs.
-- On a fresh org, an internal delete scores below the REVIEW threshold. To gate every delete, add a policy in app.vulnify.io (for example, `DELETE_DATA` over 100 records goes to REVIEW). The guard needs no code change.
+Mock mode does not call the API. It applies the demo policy in `mock_client.py`, so you see all three outcomes.
 
-The valid values for `action` are `READ_DATA`, `WRITE_DATA`, `DELETE_DATA`, `EXPORT_DATA` and `SEND_EMAIL`. The valid values for `destination` are `INTERNAL`, `EXTERNAL_EMAIL` and `EXTERNAL_API`.
+With a TEST key, the same three descriptions go to `https://api.vulnify.io` through `Vulnify.guard`. On a new organization the risk engine allows the read and sends the 800-record external export to REVIEW. A production delete is BLOCK once a DELETE policy in the app says so. Until that policy exists, the API's own score decides, and the mock is what shows BLOCK. Register `Project Files`, `Customer Database`, and `Production Database` if a check reports an unknown resource.
 
-Tested live on 2026-10-16 against a Vulnify TEST organization with `openai-agents==0.24.0` and `vulnify==0.4.2`.
+`action` is one of `READ_DATA`, `WRITE_DATA`, `DELETE_DATA`, `EXPORT_DATA`, `SEND_EMAIL`. `destination` is one of `INTERNAL`, `EXTERNAL_EMAIL`, `EXTERNAL_API`.

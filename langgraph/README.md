@@ -1,37 +1,46 @@
-# LangGraph + Vulnify: REVIEW pauses for a human
+# LangChain and LangGraph + Vulnify
 
-Shows: a graph where every proposed action passes a `vulnify_check` node. ALLOW goes straight to `execute`. BLOCK goes to `stop`. REVIEW goes to a `human_approval` node that calls LangGraph's `interrupt()`, so the run pauses until a person answers and is resumed with `Command(resume=...)`.
+Shows: LangChain tools on a LangGraph `ToolNode`, gated by `langgraph_tool_guard` from the `vulnify` package. The tool runs only when the decision is ALLOW. REVIEW and BLOCK become an error tool message, and the tool function does not run.
 
+The planner is scripted, so there is no model key. It requests three calls:
+
+| Tool | What Vulnify is told | Result |
+|---|---|---|
+| `read_file` | `READ_DATA` on `Project Files`, 1 record | ALLOW. The file is read. |
+| `export_customers` | `EXPORT_DATA` of 800 records to `EXTERNAL_EMAIL` | REVIEW. Held for a person. The export does not run. |
+| `delete_production_database` | `DELETE_DATA` on `Production Database` | BLOCK. The delete does not run. |
+
+A person approves or denies a REVIEW in the [Vulnify app](https://app.vulnify.io) or in Slack. Pass `wait={"timeout": 120}` to `build()` when this process should wait for that answer. Without `wait`, REVIEW returns immediately and the tool stays unrun.
+
+The same guard is the `wrap_tool_call` middleware for LangChain `create_agent`. That path needs the `langchain` package, which this example does not install:
+
+```python
+from langchain.agents import create_agent
+from langchain.agents.middleware import wrap_tool_call
+
+agent = create_agent(model, tools=TOOLS, middleware=[wrap_tool_call(guard)])
 ```
-START -> plan -> vulnify_check --ALLOW--> execute -> END
-                               --REVIEW-> human_approval --yes--> execute
-                               --BLOCK--> stop          --no---> stop
-```
 
-> **Stub planner, real Vulnify.** `plan` is a stand-in for an LLM node that always proposes exporting 800 customers to an outside email. The Vulnify check is a real API call. The human answer here is collected inside the graph, and the Vulnify event stays in your review queue at app.vulnify.io. To let reviewers decide in Vulnify (or Slack) instead, replace the `interrupt()` with `vulnify.wait_for_review(event_id)`.
+## Setup
 
-## Run it (2 minutes)
+1. Sign up at https://app.vulnify.io and create a TEST key. Copy `.env.example` to `.env` (gitignored) and paste the key there.
+2. Install the pinned packages:
 
 ```bash
 python -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env && set -a && . ./.env && set +a   # add a TEST key from app.vulnify.io/api-keys
-python main.py              # the human denies
-python main.py --approve    # the human approves
-pytest -q                   # offline, no key needed
 ```
 
-Set `VULNIFY_AGENT` to an agent that already exists in your org. New names register on first use and count toward your plan's agent limit.
+3. Run it:
 
-## Expected output
-
-```
-PAUSED for a human: Vulnify REVIEW, event 290c4a87-…
-  reasons: Export operation; External destination; Large data volume (800 records)
-  human answers: deny
-result: not executed (REVIEW, denied by human) | side effects: []
+```bash
+python main.py     # mock mode when .env has no real key; live when VULNIFY_API_KEY is set
+python main.py --mock
+pytest -q          # offline
 ```
 
-With `--approve`, the last line is `result: executed | side effects: ['EXPORT_DATA 800 customers -> EXTERNAL_EMAIL']`.
+Mock mode does not call the API. It applies the demo policy in `mock_client.py`, so you see all three outcomes.
 
-Tested live on 2026-10-16 against a Vulnify TEST organization with `langgraph==1.2.15` and `vulnify==0.4.2`.
+With a TEST key, the same three descriptions go to `https://api.vulnify.io` through `Vulnify.guard`. On a new organization the risk engine allows the read and sends the 800-record external export to REVIEW. A production delete is BLOCK once a DELETE policy in the app says so. Until that policy exists, the API's own score decides, and the mock is what shows BLOCK. Register `Project Files`, `Customer Database`, and `Production Database` if a check reports an unknown resource.
+
+`action` is one of `READ_DATA`, `WRITE_DATA`, `DELETE_DATA`, `EXPORT_DATA`, `SEND_EMAIL`. `destination` is one of `INTERNAL`, `EXTERNAL_EMAIL`, `EXTERNAL_API`.

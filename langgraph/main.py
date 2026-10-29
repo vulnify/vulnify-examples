@@ -1,21 +1,39 @@
 import os
 import sys
 
-from langgraph.types import Command
 from vulnify import Vulnify
 
 import graph
+from mock_client import MockVulnify
 
-if not os.environ.get("VULNIFY_API_KEY"):
-    sys.exit("Set VULNIFY_API_KEY (see .env.example)")
-approve = "--approve" in sys.argv
-app = graph.build(Vulnify(api_key=os.environ["VULNIFY_API_KEY"]))
-cfg = {"configurable": {"thread_id": "demo-1"}}
-out = app.invoke({"request": "Send all customers to partner@example.net"}, cfg)
-if "__interrupt__" in out:
-    info = out["__interrupt__"][0].value
-    print(f"PAUSED for a human: Vulnify REVIEW, event {info['event_id']}")
-    print("  reasons:", "; ".join(info["reasons"]))
-    print(f"  human answers: {'approve' if approve else 'deny'}")
-    out = app.invoke(Command(resume={"approved": approve}), cfg)
-print("result:", out["result"], "| side effects:", graph.EXECUTED)
+
+def load_env(path=".env"):
+    if not os.path.exists(path):
+        return
+    with open(path, encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+def client():
+    load_env()
+    key = os.environ.get("VULNIFY_API_KEY", "").strip()
+    if key in ("", "vln_test_your_key_here", "vln_test_your_key") or "--mock" in sys.argv:
+        print("Mock mode: no API call. A file read is ALLOW, the export is REVIEW, the delete is BLOCK.")
+        return MockVulnify()
+    print("Live mode: decisions come from https://api.vulnify.io")
+    return Vulnify(api_key=key, fail_mode="closed")
+
+
+def main():
+    for row in graph.run(client()):
+        print(f"{row['tool']}: {row['output']}")
+    print("side effects:", graph.EXECUTED)
+
+
+if __name__ == "__main__":
+    main()
