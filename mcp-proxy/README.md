@@ -24,6 +24,8 @@ export_customers: STOPPED - Vulnify REVIEW (event 2adf3544-…): Export operatio
 delete_customers: ok - UPSTREAM RAN: deleted 3 customers
 ```
 
+The delete goes through because that TEST org had no policy for it: deleting 3 internal records scores low risk, so Vulnify returns ALLOW. Add a BLOCK policy for `DELETE_DATA` on your customers resource (one of the default policies a Claude connection creates) and the same call comes back `STOPPED - Vulnify BLOCK`.
+
 ## Use it with your client
 
 ```json
