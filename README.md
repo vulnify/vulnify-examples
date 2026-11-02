@@ -4,11 +4,12 @@ Copy-paste setups that put [Vulnify](https://www.vulnify.io) in front of an agen
 
 REVIEW holds the action. A person approves or denies it in the [Vulnify app](https://app.vulnify.io) or in Slack. BLOCK stops it. ALLOW runs it.
 
-Each folder has a README, a gitignored `.env` for a TEST key from https://app.vulnify.io, pinned dependencies, and a mock mode that runs with no key. The first six rows use one scenario: reading a file is ALLOW, exporting 800 records to an external email is REVIEW, and deleting a production database is BLOCK. The Claude Code hook maps that export to `EXTERNAL_API` because the tool call is a file upload, and it only checks the file read when `VULNIFY_HOOK_CHECK_READS=true`.
+Each folder has a README, a gitignored `.env` for a TEST key from https://app.vulnify.io, pinned dependencies, and a mock mode that runs with no key. The first seven rows use one scenario: reading a file is ALLOW, exporting 800 records to an external email is REVIEW, and deleting a production database is BLOCK. The Claude Code hook maps that export to `EXTERNAL_API` because the tool call is a file upload, and it only checks the file read when `VULNIFY_HOOK_CHECK_READS=true`.
 
 | Example | Stack | What it shows |
 |---|---|---|
 | [langgraph/](langgraph/) | Python, LangChain tools, LangGraph | `langgraph_tool_guard` on a `ToolNode`. REVIEW and BLOCK become an error tool message. |
+| [google-adk/](google-adk/) | Python, Google ADK | `before_tool_callback` on an `LlmAgent`. REVIEW and BLOCK are returned to the model and the tool does not run. |
 | [crewai/](crewai/) | Python, CrewAI | `guard_crewai_tool` on three `BaseTool`s attached to an `Agent` and a `Crew`. |
 | [vercel-ai-sdk/](vercel-ai-sdk/) | Node, Vercel AI SDK | `guardAiSdkTools` before `execute`. A blocked call returns `{ blocked: true }` to the model. |
 | [openai-agents-sdk/](openai-agents-sdk/) | Python, OpenAI Agents SDK | `guard_openai_agents_tool` on each `function_tool`. The `Runner` gets the reason text instead of a result. |
